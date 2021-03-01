@@ -28,7 +28,7 @@ library
                      , Talos.SymExec.StdLib
                      , Talos.SymExec.ModelParser
                      , Talos.SymExec.TC
-                     -- , Talos.SymExec.Path
+                     , Talos.SymExec.Path
 
                      -- , Talos.Backend.Z3
 

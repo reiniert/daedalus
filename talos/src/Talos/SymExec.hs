@@ -8,9 +8,9 @@ module Talos.SymExec ( solverSynth
 
 
 import Control.Monad.Reader
-import Data.Maybe (maybeToList)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
+import Data.Maybe (maybeToList)
 import Data.Set (Set)
 import qualified Data.Set as Set
 
@@ -20,26 +20,29 @@ import qualified Data.Set as Set
 import SimpleSMT (SExpr, Solver)
 import qualified SimpleSMT as S
 
-import Daedalus.Panic
 import Daedalus.PP
+import Daedalus.Panic
 import Daedalus.Type.AST hiding (tByte, tUnit, tMaybe, tMap)
 import Daedalus.Type.PatComplete (CaseSummary(..))
 
-import Talos.SymExec.Monad
 import Talos.SymExec.ModelParser
-import Talos.SymExec.TC
+import Talos.SymExec.Monad
+import Talos.SymExec.Path
 import Talos.SymExec.StdLib
+import Talos.SymExec.TC
 
 import Talos.Analysis.Domain
 import Talos.Analysis.EntangledVars
-import Talos.Analysis.PathSet
 import Talos.Analysis.Monad (Summary(..))
+import Talos.Analysis.Slice (Slice(..), SimpleSlice(..))
+import qualified Talos.Analysis.Slice as S
 
 
 --------------------------------------------------------------------------------
 -- Solver synthesis
 
-solverSynth :: Solver -> SummaryClass -> TCName Value -> ProvenanceTag -> FuturePathSet a -> IO SelectedPath
+solverSynth :: Solver -> SummaryClass -> TCName Value ->
+               ProvenanceTag -> Slice a -> IO SelectedPath
 solverSynth s cl root prov fps = S.inNewScope s $ do
   model <- S.declare s modelN tModel
   S.assert s (S.fun (mkPredicateN cl (tcName root)) [model])
@@ -68,45 +71,47 @@ solverSynth s cl root prov fps = S.inNewScope s $ do
                     , "  Result: " ++ S.showsSExpr res ""
                     ]) []
 
--- This has to follow symExecFuturePathSet
-parseModel :: ProvenanceTag -> FuturePathSet a ->  ModelP SelectedPath
-parseModel prov fps0 = go fps0
+-- This has to follow symExecSlice
+parseModel :: ProvenanceTag -> Slice a ->  ModelP SelectedPath
+parseModel prov = go 
   where
-    go fps =
-      case fps of
-        Unconstrained   -> pure Unconstrained 
-        DontCare n fps' -> dontCare n <$> go fps'
-        PathNode (Assertion {}) fps' -> dontCare 1 <$> go fps'
-        PathNode n fps'    -> uncurry PathNode <$> pSeq (parseNodeModel prov n) (go fps')
+    go sl =
+      case sl of
+        SDontCare n sl'           -> dontCare n <$> go sl'
+        SDo _x slL slR            -> uncurry pathNode <$> pSeq (parseNodeModel prov slL) (go slR)
+        SDo_   slL slR            -> uncurry pathNode <$> pSeq (parseNodeModel prov slL) (go slR)
+        SUnconstrained            -> pure Unconstrained
+        SSimple (SPure {})        -> pure Unconstrained
+        SSimple (SCoerceCheck {}) -> pure Unconstrained
+        SSimple s                 -> pathNode <$> parseSimple <*> pure Unconstrained
 
-parseNodeModel :: ProvenanceTag -> FutureNode a -> ModelP SelectedNode
-parseNodeModel prov fpn = 
-  case fpn of
-    -- We could also declare an aux type here which would make things
-    -- a fair bit more readable.  We could aso use a tree instead of a
-    -- list (for term size)
-    Choice fpss         -> pIndexed (\n -> SelectedChoice n <$> parseModel prov (fpss !! n))
-    FNCase (CaseNode { caseAlts = alts, caseDefault = m_fps }) ->
-      let go n | n < NE.length alts = SelectedCase n <$> parseModel prov (fnAltBody (alts NE.!! n))
-               | Just fps <- m_fps  = SelectedCase n <$> parseModel prov fps
-               | otherwise = panic "Case result out of bounds" [show n]
-      in pIndexed go
+    pathNode (NestedNode Unconstrained) = dontCare 1
+    pathNode sp                         = PathNode sp
 
-    Call (CallNode { callClass = cl, callPaths = paths }) ->
-      let doOne (Wrapped (_, fps)) = parseModel prov fps
-      in SelectedCall cl <$> foldr1 (\fc rest -> uncurry mergeSelectedPath <$> pSeq fc rest)
-                                    (map doOne (Map.elems paths))
-
-    FNMany (ManyNode { manyBody = fps }) -> do
-      let pfps = parseModel prov fps
-          doOne l r = uncurry (:) <$> pSeq l r
-          
-      SelectedMany <$> (pIndexed $ \n -> foldr doOne (pure []) (replicate (fromIntegral n) pfps))
-      
-    NestedNode fps        -> SelectedNested <$> parseModel prov fps
-    SimpleNode {}         -> SelectedSimple prov <$> pBytes
-    
-    Assertion {} -> panic "Impossible" [] 
+parseNodeModel :: ProvenanceTag -> Slice a -> ModelP SelectedNode
+parseNodeModel prov = go
+  where
+    go sl =
+      case sl of
+        SSimple (SPure {})        -> pure (SimpleNested Unconstrained)
+        SSimple (SCoerceCheck {}) -> pure (SimpleNested Unconstrained)
+        SSimple _                 -> SelectedSimple prov <$> pBytes
+        SChoice sls               -> pIndexed (\n -> SelectedChoice n <$> parseModel prov (sls !! n))
+        SCase (CaseNode { caseAlts = alts, caseDefault = m_sl }) ->
+          let go n | n < NE.length alts = SelectedCase n <$> parseModel prov (sAltBody (alts NE.!! n))
+                   | Just sl <- m_sl  = SelectedCase n <$> parseModel prov sl
+                   | otherwise = panic "Case result out of bounds" [show n]
+          in pIndexed go
+        SCall (CallNode { callClass = cl, callPaths = paths }) ->
+          let doOne (Wrapped (_, sl)) = parseModel prov sl
+          in SelectedCall cl <$> foldr1 (\fc rest -> uncurry mergeSelectedPath <$> pSeq fc rest)
+                                        (map doOne (Map.elems paths))
+        SMany (ManyNode { manyBody = sl }) -> do
+          let psl = parseModel prov sl
+              doOne l r = uncurry (:) <$> pSeq l r
+          SelectedMany <$> (pIndexed $ \n -> foldr doOne (pure []) (replicate (fromIntegral n) psl))
+        
+        _                         -> SimpleNested <$> parseModel prov sl
 
 -- -----------------------------------------------------------------------------
 -- Types
@@ -271,21 +276,21 @@ nameToSMTNameWithClass cl n = show (pp (nameScopedIdent n) <> "@" <> pp (nameID 
 -- -----------------------------------------------------------------------------
 -- Symbolic execution of future path sets
 
--- Turn a summary into a SMT formula (+ associated types)
+-- Turn a summary into a SMT formula 
 symExecSummary :: Name -> Summary -> SymExecM ()
 symExecSummary fn summary = do
   -- Send the roots to the solver
-  Map.foldMapWithKey (\root fps -> go (ProgramVar root) (mempty, fps)) (pathRootMap summary)  
+  Map.foldMapWithKey (\root sl -> go (ProgramVar root) (mempty, sl)) (pathRootMap summary)  
   -- Send the argument domain fpss to the solver
   Map.foldMapWithKey go (explodeDomain (exportedDomain summary))
   where
     cl = summaryClass summary
-    go ev (evs, fps) = do
+    go ev (evs, sl) = do
       let predN     = evPredicateN cl fn ev
           ty        = typeOf ev
           hasResult = case ev of { ResultVar {} -> True; ProgramVar {} -> False }
           frees     = [ v | ProgramVar v <- Set.toList (getEntangledVars evs) ]
-      symExecFuturePathSet hasResult predN ty frees fps
+      defineSliceFun hasResult predN ty frees sl
 
 mkPredicateN :: SummaryClass -> Name -> String
 mkPredicateN cl root = "Rel-" ++ nameToSMTNameWithClass cl root
@@ -297,20 +302,16 @@ evPredicateN cl fn ev =
     ProgramVar v   -> mkPredicateN cl (tcName v)
 
 -- Used to turn future path sets and arg domains into SMT terms.
--- Configs have a single constuctor, so we use define-sort to aid in
--- readibility of the output.
-symExecFuturePathSet :: Bool -> String -> Type -> 
-                        [TCName Value] -> FuturePathSet a -> SymExecM ()
-symExecFuturePathSet hasResult predN ty frees fps = do
-  body  <- mkExists (Set.toList (assignedVars fps))
-                   <$> futurePathSetPred (S.const modelN) m_resN fps
-  withSolver $ \s -> void $ liftIO $ S.defineFun s predN args S.tBool body
+defineSliceFun:: String -> Maybe Type -> 
+                 [TCName Value] -> Slice a -> SymExecM ()
+defineSliceFun predN m_resT frees sl = do
+  body  <- symExecSlice (S.const modelN) sl
+  withSolver $ \s -> void $ liftIO $ S.defineFun s predN args (tResult resT) body
   where
-    m_resN = if hasResult then Just (S.const resN) else Nothing
+    resT    = maybe tUnit symExecTy m_resT
     args    = map (\v -> (tcNameToSMTName v, symExecTy (typeOf v))) frees
               ++ [(modelN, tModel)]
-              ++ if hasResult then [(resN, symExecTy ty)] else []
-
+  
 -- The SMT datatype looks something like this:
 -- data SMTPath =
 --   Bytes ByteString
@@ -323,33 +324,8 @@ symExecFuturePathSet hasResult predN ty frees fps = do
 
 -- FIXME: we will use the '$cfg' variable to refer to the current
 -- config, and use shadowing whe updating.
-modelN, resN :: String
+modelN :: String
 modelN  = "$model"
-resN = "$res"
-
--- Does not include the result
-assignedVars :: FuturePathSet a -> Set (TCName Value)
-assignedVars = go
-  where
-    go Unconstrained    = Set.empty
-    go (DontCare _ fps) = go fps
-    go (PathNode n fps) = go fps `Set.union`
-      case n of
-        SimpleNode rv _ -> evToSet rv
-        Choice     fpss -> foldMap go fpss
-        FNCase (CaseNode { caseAlts = alts, caseDefault = m_def }) ->
-          foldMap (go . fnAltBody) alts `Set.union` foldMap go m_def
-        Call (CallNode { callResultAssign = Just ev }) -> evToSet ev
-        Call {} -> mempty
-        -- the body is treated specially, so doesn't contribute.
-        FNMany (ManyNode { manyResultAssign = Just ev }) -> evToSet ev
-        FNMany {} -> mempty
-
-        Assertion {} -> mempty        
-        NestedNode fps' -> go fps'
-
-    evToSet (ProgramVar v) = Set.singleton v
-    evToSet (ResultVar {}) = mempty                                                 
 
 --------------------------------------------------------------------------------
 -- SMT Helpers
@@ -401,12 +377,36 @@ evToRHS (Just res) (ResultVar {}) = res
 evToRHS _ _                       = panic "Expected a result" []
 
 --------------------------------------------------------------------------------
+-- Embedding the Maybe monad (called Result)
+
+failN :: String
+failN = "$fail"
+
+symPure :: SExpr -> SExpr
+symPure r = S.fun "Success" [r]
+
+symEmpty :: SExpr
+symEmpty = S.const failN
+
+symBind :: SExpr -> SExpr -> SExpr -> SExpr
+symBind x lhs rhs =
+  mkMatch lhs [ (S.fun "Success" [x], rhs)
+              , (S.const "_", symEmpty)
+              ]
+
+symBind_ :: SExpr -> SExpr -> SExpr
+symBind_ = symBind (S.const "_")
+
+symGuard :: SExpr -> SExpr
+symGuard b = S.ite b (symPure sUnit) symEmpty
+
+--------------------------------------------------------------------------------
 -- Many
 
 -- Returns a predicate over the last argument
-symExecManyBounds ::  ManyBounds (TC a Value) -> SExpr -> [SExpr]
-symExecManyBounds (Exactly t)   v = [ S.eq v (symExecV t) ]
-symExecManyBounds (Between l h) v = mBound l (S.geq v) ++ mBound h (S.leq v)
+symExecManyBounds ::  ManyBounds (TC a Value) -> SExpr -> SExpr
+symExecManyBounds (Exactly t)   v = S.eq v (symExecV t) 
+symExecManyBounds (Between l h) v = mkAnd $ mBound l (S.geq v) ++ mBound h (S.leq v)
   where
     mBound Nothing  _ = []
     mBound (Just t) f = [ f (symExecV t) ]
@@ -414,65 +414,66 @@ symExecManyBounds (Between l h) v = mBound l (S.geq v) ++ mBound h (S.leq v)
 -- We turn Many (l .. h) b into an assertion over l and h, and a call
 -- into a recursive procedure for b, using tuples as a list.
 symExecMany :: SExpr -> Maybe SExpr -> ManyNode a -> SymExecM SExpr
-symExecMany model m_funres (ManyNode { manyResultAssign = m_res
-                                     , manyBounds       = bnds
+symExecMany model m_funres (ManyNode { manyBounds       = bnds
                                      , manyFrees        = evFrees
                                      , manyBody         = fps
                                      }) = do
-  auxN <- freshSym "many"
-
-  symExecBody auxN
+  error "unimplemented"
   
-  let bndsP = symExecManyBounds bnds count
-      resP  = S.eq count . sArrayLen <$> resCallArgs
-      callP = [ S.fun auxN (passArgs ++ resCallArgs ++ [S.int 0 {- i -}, model ]) ]
-      p     = mkAnd (bndsP ++ resP ++ callP)
+  -- auxN <- freshSym "many"
+
+  -- symExecBody auxN
   
-  pure (mkIndexed countN model p)
+  -- let bndsP = symExecManyBounds bnds count
+  --     resP  = S.eq count . sArrayLen <$> resCallArgs
+  --     callP = [ S.fun auxN (passArgs ++ resCallArgs ++ [S.int 0 {- i -}, model ]) ]
+  --     p     = mkAnd (bndsP ++ resP ++ callP)
+  
+  -- pure (mkIndexed countN model p)
 
-  where
-    count  = S.const countN
-    countN = "$count"
-    iN = "$i"
-    i  = S.const iN
+  -- where
+  --   count  = S.const countN
+  --   countN = "$count"
+  --   iN = "$i"
+  --   i  = S.const iN
 
-    -- Dealing with optional returns
-    (resParam, resCallArgs, m_res') = case m_res of
-      Nothing  -> ([], [], Nothing)
-      Just res -> ( [(resN, symExecTy (typeOf res))]
-                  , [(evToRHS m_funres res)]
-                  , Just (sSelectL (S.const resN) i)
-                  )
+  --   -- Dealing with optional returns
+  --   (resParam, resCallArgs, m_res') = case m_res of
+  --     Nothing  -> ([], [], Nothing)
+  --     Just res -> ( [(resN, symExecTy (typeOf res))]
+  --                 , [(evToRHS m_funres res)]
+  --                 , Just (sSelectL (S.const resN) i)
+  --                 )
     
-    frees     = [ v | ProgramVar v <- Set.toList (getEntangledVars evFrees) ]
+  --   frees     = [ v | ProgramVar v <- Set.toList (getEntangledVars evFrees) ]
 
-    -- These are passed through.
-    passParams  = map (\v -> (tcNameToSMTName v, symExecTy (typeOf v))) frees
-                  ++ [(countN, S.tInt)]
+  --   -- These are passed through.
+  --   passParams  = map (\v -> (tcNameToSMTName v, symExecTy (typeOf v))) frees
+  --                 ++ [(countN, S.tInt)]
 
-    passArgs    = map (S.const . fst) passParams
+  --   passArgs    = map (S.const . fst) passParams
     
-    -- c.f. symExecFuturePathSet
-    symExecBody predN = do
-      let varArgs = [ S.add i (S.int 1)
-                    , S.fun "msnd" [S.const modelN]
-                    ]
+  --   -- c.f. symExecSlice
+  --   symExecBody predN = do
+  --     let varArgs = [ S.add i (S.int 1)
+  --                   , S.fun "msnd" [S.const modelN]
+  --                   ]
 
-          resArgs  = map (S.const . fst) resParam
-          recCallP = S.fun predN (passArgs ++ resArgs ++ varArgs)
+  --         resArgs  = map (S.const . fst) resParam
+  --         recCallP = S.fun predN (passArgs ++ resArgs ++ varArgs)
       
-      fpsP <- mkExists (Set.toList (assignedVars fps))
-              . mklet modelN (S.fun "mfst" [S.const modelN])
-              <$> futurePathSetPred (S.const modelN) m_res' fps
+  --     fpsP <- mkExists (Set.toList (assignedVars fps))
+  --             . mklet modelN (S.fun "mfst" [S.const modelN])
+  --             <$> futurePathSetPred (S.const modelN) m_res' fps
 
-      let body = S.ite (S.lt i count)
-                 (S.and fpsP recCallP)
-                  -- the prover can probably figure this out itself?
-                 (S.and (S.eq i count) (S.eq (S.const modelN) (S.const "munit")))
+  --     let body = S.ite (S.lt i count)
+  --                (S.and fpsP recCallP)
+  --                 -- the prover can probably figure this out itself?
+  --                (S.and (S.eq i count) (S.eq (S.const modelN) (S.const "munit")))
 
-      let ps = passParams ++ resParam ++ [(iN, S.tInt), (modelN, tModel)]
+  --     let ps = passParams ++ resParam ++ [(iN, S.tInt), (modelN, tModel)]
 
-      withSolver $ \s -> void $ liftIO $ S.defineFunRec s predN ps S.tBool (\_ -> body)
+  --     withSolver $ \s -> void $ liftIO $ S.defineFunRec s predN ps S.tBool (\_ -> body)
                              
 -- FIXME: we use exists here as an implementation technique, they
 -- aren't really requires as they are all assigned (well, asserted
@@ -483,21 +484,36 @@ symExecMany model m_funres (ManyNode { manyResultAssign = m_res
 -- We do traverse the fps again, so that might be expensive
 --
 -- We need to be in a monad as we need aux. definitions for Many etc.
-futurePathSetPred :: forall a. SExpr -> Maybe SExpr -> FuturePathSet a -> SymExecM SExpr
-futurePathSetPred model m_res fps0 = collect model fps0
+symExecSlice :: forall a. SExpr -> SExpr -> Slice a -> SymExecM SExpr
+symExecSlice model resTy = bindFailN . collect model 
   where
-    collect model' fps = mkAnd <$> collect' model' fps
-
-    collect' :: SExpr -> FuturePathSet a -> SymExecM [SExpr]
-    collect' model' fps = do
-      let mkRest fps'        = do
-            rest <- mklet modelN (S.fun "msnd" [model']) <$> collect (S.const modelN) fps'
-            pure [ mkIsSeq model', rest ]
-          mkRestNoModel fps' = collect' model' fps'
+    bindFailN = mklet failN (S.fun "as" [ S.const "Failure", tResult resTy ])
+    
+    collect :: SExpr -> Slice a -> SymExecM SExpr
+    collect model' sl = do
+      let mkRest sl' = mklet modelN (S.fun "msnd" [model']) <$> collect (S.const modelN) sl'
+      --     mkRestNoModel fps' = collect' model' fps'
+      
           thisModel          = S.fun "mfst" [model']
-      case fps of
-        Unconstrained -> pure [] 
-        DontCare _ fps' -> mkRestNoModel fps'
+      case sl of
+        SDontCare _ sl' -> collect model' sl'
+        SDo x slL slR   ->
+          symBind_ (symGuard (mkIsSeq model'))
+                   (symBind (symExecTCName x) (symExecSlice thisModel (symExecTy (typeOf x)) slL) (mkRest slR))
+
+        SDo_  slL slR   ->
+          symBind_ (symGuard (mkIsSeq model'))
+                   (symBind_ (symExecSlice thisModel (symExecTy tUnit) slL) (mkRest slR))
+          
+        SUnconstrained   -> symPure sUnit
+        SSimple s        -> pure (mkBytes (flip goS s))
+
+
+        -- HERE
+
+
+        
+        DontCare _ fps' -> collect model' fps'
             
         PathNode (Assertion a) fps' ->
          -- Doesn't have an associated element in the model, so we
@@ -509,6 +525,34 @@ futurePathSetPred model m_res fps0 = collect model fps0
               <$> mkRest fps'
           
         PathNode n fps' -> (++) <$> goN thisModel n <*> mkRest fps'
+
+    goS bytes s = error "unimplemented"
+      -- case s of
+      --   SPure v  -> symBind_ (symGuard (S.fun "is-nil" [bytes])) (symPure (symExecV v))
+      --   SGetByte -> S.fun "getByteP" [bytes]
+        
+      -- TCMatch NoSem p -> -- FIXME, this should really not happen (we shouldn't see it)
+      --   S.fun "exists" [ S.List [ S.List [ S.const resN, tByte ]]
+      --                  , S.and (S.fun "getByteP" [rel, S.const resN]) (symExecP p (S.const resN)) ]
+      -- TCMatch _s p    -> S.and (S.fun "getByteP" [rel, res]) (symExecP p res)
+      
+      -- TCMatchBytes _ws v ->
+      --   S.and (S.eq rel res) (S.eq res (symExecV v))
+
+      -- -- Convert a value of tyFrom into tyTo.  Currently very limited
+      -- TCCoerceCheck ws (Type tyFrom) (Type tyTo) e
+      --   | TUInt _ <- tyFrom, TInteger <- tyTo ->
+      --       S.and (S.fun "is-nil" [rel])
+      --             (if ws == YesSem then (S.fun "bv2int" [symExecV e]) else S.bool True)
+      -- TCCoerceCheck _ws tyFrom tyTo _e ->
+      --   panic "Unsupported types" [showPP tyFrom, showPP tyTo]
+        
+      -- _ -> panic "BUG: unexpected term in symExecG" [show (pp tc)]
+
+  where
+    resN = "$tres"
+        
+        
 
     -- model' is possibly a complex expression here, so it needs to be bound if it is used multipe times.
     
@@ -565,14 +609,13 @@ futurePathSetPred model m_res fps0 = collect model fps0
     mkBytes model' bodyf =
       let bytes  = S.const "$bytes"
       in mkMatch model' [ ( S.fun "bytes" [bytes], bodyf bytes )
-                        , ( S.const "_", S.bool False)
+                        , ( S.const "_", symEmpty)
                         ]
      
-    mkCaseAlt e (FNAlt { fnAltPatterns = pats, fnAltBody = b }) = do
+    mkCaseAlt e (FNAlt { sAltPatterns = pats, sAltBody = b }) = do
       b' <- collect' (S.const modelN) b
       pure (mkExists (Set.toList (Set.unions (map patBindsSet pats)))
             (mkAnd (concatMap (relPattern e) pats ++ b')))
-      
 
     -- Assert we match a pattern
     relPattern e pat =

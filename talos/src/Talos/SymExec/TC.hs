@@ -252,35 +252,35 @@ symExecP tc b =
 -- symExecArg e (ValArg v) = symExecV v
 -- symExecArg _ _          = error "Shoudn't happen: symExecArg nonValue"
 
-symExecG :: SExpr -> SExpr -> TC a Grammar -> SExpr
-symExecG rel res tc
-  | not (isSimpleTC tc) = error "Saw non-simple node in symExecG"
-  | otherwise = 
-    case texprValue tc of
-      -- We (probably) don't care about the bytes here, but this gives smaller models(?)
-      TCPure v       -> S.and (S.fun "is-nil" [rel])
-                              (S.eq  res (symExecV v))
-      TCGetByte {}    -> S.fun "getByteP" [rel, res]
-      TCMatch NoSem p -> -- FIXME, this should really not happen (we shouldn't see it)
-        S.fun "exists" [ S.List [ S.List [ S.const resN, tByte ]]
-                       , S.and (S.fun "getByteP" [rel, S.const resN]) (symExecP p (S.const resN)) ]
-      TCMatch _s p    -> S.and (S.fun "getByteP" [rel, res]) (symExecP p res)
+-- symExecG :: SExpr -> SExpr -> TC a Grammar -> SExpr
+-- symExecG rel res tc
+--   | not (isSimpleTC tc) = error "Saw non-simple node in symExecG"
+--   | otherwise = 
+--     case texprValue tc of
+--       -- We (probably) don't care about the bytes here, but this gives smaller models(?)
+--       TCPure v       -> S.and (S.fun "is-nil" [rel])
+--                               (S.eq  res (symExecV v))
+--       TCGetByte {}    -> S.fun "getByteP" [rel, res]
+--       TCMatch NoSem p -> -- FIXME, this should really not happen (we shouldn't see it)
+--         S.fun "exists" [ S.List [ S.List [ S.const resN, tByte ]]
+--                        , S.and (S.fun "getByteP" [rel, S.const resN]) (symExecP p (S.const resN)) ]
+--       TCMatch _s p    -> S.and (S.fun "getByteP" [rel, res]) (symExecP p res)
       
-      TCMatchBytes _ws v ->
-        S.and (S.eq rel res) (S.eq res (symExecV v))
+--       TCMatchBytes _ws v ->
+--         S.and (S.eq rel res) (S.eq res (symExecV v))
 
-      -- Convert a value of tyFrom into tyTo.  Currently very limited
-      TCCoerceCheck ws (Type tyFrom) (Type tyTo) e
-        | TUInt _ <- tyFrom, TInteger <- tyTo ->
-            S.and (S.fun "is-nil" [rel])
-                  (if ws == YesSem then (S.fun "bv2int" [symExecV e]) else S.bool True)
-      TCCoerceCheck _ws tyFrom tyTo _e ->
-        panic "Unsupported types" [showPP tyFrom, showPP tyTo]
+--       -- Convert a value of tyFrom into tyTo.  Currently very limited
+--       TCCoerceCheck ws (Type tyFrom) (Type tyTo) e
+--         | TUInt _ <- tyFrom, TInteger <- tyTo ->
+--             S.and (S.fun "is-nil" [rel])
+--                   (if ws == YesSem then (S.fun "bv2int" [symExecV e]) else S.bool True)
+--       TCCoerceCheck _ws tyFrom tyTo _e ->
+--         panic "Unsupported types" [showPP tyFrom, showPP tyTo]
         
-      _ -> panic "BUG: unexpected term in symExecG" [show (pp tc)]
+--       _ -> panic "BUG: unexpected term in symExecG" [show (pp tc)]
 
-  where
-    resN = "$tres"
+--   where
+--     resN = "$tres"
       
 --------------------------------------------------------------------------------
 -- Simple nodes
