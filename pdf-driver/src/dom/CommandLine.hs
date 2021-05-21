@@ -11,6 +11,7 @@ data Command =
   | PrettyPrintAll
   | Validate
   | ListXRefs
+  | ListIncUpdates
   | ParseValue
   | ShowHelp
 
@@ -38,10 +39,14 @@ options = OptSpec
   , progOptions =
       [ Option [] ["xrefs"]
         "List the cross-reference table."
-      $ NoArg $ \s -> Right s { command = ListXRefs }
+        $ NoArg $ \s -> Right s { command = ListXRefs }
+
+      , Option [] ["updates"]
+        "List incremental updates."
+        $ NoArg $ \s -> Right s { command = ListIncUpdates }
 
       , Option [] ["pp"]
-        "Pretty print trailier or the reference --obj --gen"
+        "Pretty print trailer or the reference --obj --gen"
         $ NoArg \s -> Right s { command = PrettyPrint }
 
       -- , Option [] ["enc"]
