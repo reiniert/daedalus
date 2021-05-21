@@ -44,6 +44,7 @@ library
     PdfMonad.Transformer,
     PdfMonad.Release,
     PdfParserNotSpecialized,
+    PdfPP,
 
     Stdlib,
     JpegBasics,
@@ -64,6 +65,7 @@ library
 
   build-depends:
     base,
+    base64-bytestring,
     bytestring,
     containers,
     zlib,

@@ -19,6 +19,7 @@ import RTS.Input(advanceBy)
 
 import PdfMonad
 import PdfParser
+import PdfPP
 
 -- | Construct the xref table.
 parseIncUpdates ::
@@ -91,7 +92,7 @@ handlePdfResult x msg =
       case res of
         ParseOk a     -> pure a
         ParseAmbig {} -> quit msg
-        ParseErr e    -> quit (show e) -- (pp e))
+        ParseErr e    -> quit (show (pp e))
 
 ---- utilities ---------------------------------------------------------------
 

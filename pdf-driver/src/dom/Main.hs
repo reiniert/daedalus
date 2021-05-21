@@ -13,7 +13,7 @@ import SimpleGetOpt
 import RTS.Input(newInput)
 import RTS.Vector(vecFromRep,vecToRep,toList) 
 
-import XRef(findStartXRef, parseXRefs1, parseXRefs2)
+import XRef(findStartXRef, parseXRefs1, parseXRefs2,printObjIndex)
 import PdfMonad
 import PdfDecl(pResolveRef)
 import PdfXRef(TrailerDict) 
@@ -22,8 +22,8 @@ import PdfValue(Value(..),Ref(..),pValue)
 import Primitives.Decrypt(makeFileKey)
 
 import PdfDOM
+import PdfPP
 import CommandLine
-import PP
 
 main :: IO ()
 main =
@@ -74,10 +74,9 @@ parsePdf opts file bs topInput =
          rToRef (R x y) = Ref (fromIntegral x) (fromIntegral y)
 
      case command opts of
-       ListXRefs -> print $ ppBlock "[" "]" (map ppXRef (Map.toList refs))
+       ListXRefs      -> printObjIndex refs
        
-       ListIncUpdates -> print $ ppBlock "[" "]" (map ppXRef (Map.toList refs))
-         -- FIXME: TODO
+       ListIncUpdates -> printObjIndex refs   -- FIXME: TODO
 
        PrettyPrintAll ->
          case map rToRef (Map.keys refs) of
