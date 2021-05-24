@@ -23,7 +23,7 @@ import RTS.Input
 
 import Common
 import PdfMonad
-import XRef(findStartXRef, parseXRefs1')
+import XRef(findStartXRef, parseXRefs1)
 import PdfParser
 import PdfDemo
 import PdfCrypto(ChooseCiph(..),pMakeContext,MakeContext(..))
@@ -114,7 +114,7 @@ fmtDriver fmt file pwd =
 
      xrefFound fmt idx
      (refs, trail) <-
-       parseXRefs1' topInput idx >>= \res ->
+       parseXRefs1 topInput idx >>= \res ->
          case res of
            ParseOk a    -> pure a
            ParseAmbig _ -> error "BUG: Ambiguous XRef table."
