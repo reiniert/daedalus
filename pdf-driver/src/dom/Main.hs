@@ -14,7 +14,13 @@ import SimpleGetOpt
 import RTS.Input(newInput)
 import RTS.Vector(vecFromRep,vecToRep,toList) 
 
-import XRef(findStartXRef, parseXRefs1, parseXRefs2, printIncUpdateReport,printObjIndex,validateUpdates)
+import XRef(findStartXRef
+           ,parseXRefs1
+           ,parseXRefs2
+           ,printIncUpdateReport
+           ,printObjIndex
+           ,validateUpdates
+           ,printCavityReport)
 import PdfMonad
 import PdfDecl(pResolveRef)
 import PdfXRef(TrailerDict) 
@@ -90,6 +96,8 @@ parsePdf opts file bs topInput =
                          printIncUpdateReport incUpdates
                          putStrLn "Combined xref table:"
                          printObjIndex 2 refs
+
+       ListCavities   -> printCavityReport topInput incUpdates
 
        PrettyPrintAll ->
          case map rToRef (Map.keys refs) of

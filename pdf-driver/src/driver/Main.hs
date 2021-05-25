@@ -219,7 +219,7 @@ driver opts = runReport opts $
                Right idx -> return idx
 
      (refs, root, trail) <-
-            liftIO (parseXRefs1' topInput idx) >>= \res ->
+            liftIO (parseXRefs1 topInput idx) >>= \res ->
             case res of
                ParseOk (r,t) -> case getField @"root" t of
                                   Nothing ->

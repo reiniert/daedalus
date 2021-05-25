@@ -12,6 +12,7 @@ data Command =
   | Validate
   | ListXRefs
   | ListIncUpdates
+  | ListCavities
   | ParseValue
   | ShowHelp
 
@@ -44,6 +45,10 @@ options = OptSpec
       , Option [] ["updates"]
         "List incremental updates."
         $ NoArg $ \s -> Right s { command = ListIncUpdates }
+
+      , Option [] ["cavities"]
+        "List cavities (in each incr. update."
+        $ NoArg $ \s -> Right s { command = ListCavities }
 
       , Option [] ["pp"]
         "Pretty print trailer or the reference --obj --gen"
