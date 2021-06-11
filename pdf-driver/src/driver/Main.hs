@@ -17,7 +17,7 @@ import Text.PrettyPrint hiding ((<>))
 import Control.Monad(when)
 import Control.Monad.IO.Class(MonadIO(..))
 import Control.Exception(evaluate,try,throwIO)
-import RTS.Numeric(intToSize)
+import RTS.Numeric(intToSize,sizeToInt)
 import RTS.Vector(vecFromRep,vecToString,vecToRep)
 import RTS.Input
 
@@ -112,7 +112,7 @@ fmtDriver fmt file pwd =
               Left err -> xrefMissing fmt err >> exitFailure
               Right idx -> pure idx
 
-     xrefFound fmt idx
+     xrefFound fmt (sizeToInt idx)
      (refs, trail) <-
        parseXRefs1 topInput idx >>= \res ->
          case res of
